@@ -1,15 +1,9 @@
-﻿using Microsoft.Win32;
 using System;
-using System.Collections;
 using System.Collections.Generic;
 using System.Linq;
-using System.Net.NetworkInformation;
-using System.Security.Claims;
-using System.Text;
+using System.Threading;
 using System.Threading.Tasks;
-using System.Xml.Linq;
-
-
+using System.IO;
 
 namespace SistemaInventarioTienda
 {
@@ -18,42 +12,46 @@ namespace SistemaInventarioTienda
         static List<Producto> productos = new List<Producto>();
         static List<Inventario> inventarios = new List<Inventario>();
 
+        static readonly object lockObj = new object();
+
+        static string logFile = "log.txt";
+        static string configFile = "config.txt";
+
+        static bool usarDisco = false;
+
         static void Main(string[] args)
         {
+            CargarConfiguracion();
+            File.WriteAllText(logFile, "===== INICIO DE EJECUCIÓN =====\n");
+
             int opcion;
 
             do
             {
                 Console.Clear();
                 Console.WriteLine("=====================================");
-                Console.WriteLine(" SISTEMA DE INVENTARIO – TIENDA ROPA ");
+                Console.WriteLine(" SISTEMA DE INVENTARIO - CONCURRENCIA ");
                 Console.WriteLine("=====================================");
                 Console.WriteLine("1. Registrar Producto");
                 Console.WriteLine("2. Agregar Inventario");
-                Console.WriteLine("3. Registrar Venta");
+                Console.WriteLine("3. Simular Ventas Concurrentes");
                 Console.WriteLine("4. Ver Inventario");
                 Console.WriteLine("5. Salir");
                 Console.Write("Seleccione una opción: ");
 
-                opcion = int.Parse(Console.ReadLine());
+                if (!int.TryParse(Console.ReadLine(), out opcion))
+                {
+                    Console.WriteLine("❌ Opción inválida");
+                    Console.ReadKey();
+                    continue;
+                }
 
                 switch (opcion)
                 {
-                    case 1:
-                        RegistrarProducto();
-                        break;
-
-                    case 2:
-                        AgregarInventario();
-                        break;
-
-                    case 3:
-                        RegistrarVenta();
-                        break;
-
-                    case 4:
-                        VerInventario();
-                        break;
+                    case 1: RegistrarProducto(); break;
+                    case 2: AgregarInventario(); break;
+                    case 3: SimularVentasConcurrentes(); break;
+                    case 4: VerInventario(); break;
                 }
 
                 Console.WriteLine("\nPresione una tecla para continuar...");
@@ -62,38 +60,90 @@ namespace SistemaInventarioTienda
             } while (opcion != 5);
         }
 
+        // ================= CONFIG =================
+
+        static void CargarConfiguracion()
+        {
+            if (File.Exists(configFile))
+            {
+                var config = File.ReadAllText(configFile).ToUpper();
+                usarDisco = config.Contains("DISCO");
+            }
+            else
+            {
+                File.WriteAllText(configFile, "MODO=RAM");
+                usarDisco = false;
+            }
+        }
+
+        static void Log(string mensaje)
+        {
+            lock (lockObj)
+            {
+                File.AppendAllText(logFile, $"{DateTime.Now:HH:mm:ss.fff} - {mensaje}\n");
+            }
+        }
+
+        // ================= PRODUCTO =================
+
         static void RegistrarProducto()
         {
             Console.Clear();
             Console.WriteLine("----- REGISTRAR PRODUCTO -----");
 
+            int id;
             Console.Write("ID: ");
-            int id = int.Parse(Console.ReadLine());
+            while (!int.TryParse(Console.ReadLine(), out id))
+                Console.Write("Ingrese un número válido: ");
+
+            lock (lockObj)
+            {
+                if (productos.Any(p => p.Id == id))
+                {
+                    Console.WriteLine("❌ Ya existe ese ID.");
+                    return;
+                }
+            }
 
             Console.Write("Nombre: ");
             string nombre = Console.ReadLine();
 
-            Console.Write("Precio Venta: ");
-            decimal precio = decimal.Parse(Console.ReadLine());
+            decimal precio;
+            Console.Write("Precio: ");
+            while (!decimal.TryParse(Console.ReadLine(), out precio))
+                Console.Write("Ingrese un precio válido: ");
 
-            productos.Add(new Producto { Id = id, Nombre = nombre, Precio = precio });
+            lock (lockObj)
+            {
+                productos.Add(new Producto { Id = id, Nombre = nombre, Precio = precio });
+            }
 
-            Console.WriteLine("✔ Producto registrado correctamente.");
+            Log($"Producto registrado: {nombre}");
+            Console.WriteLine("✔ Producto registrado.");
         }
+
+        // ================= INVENTARIO =================
 
         static void AgregarInventario()
         {
             Console.Clear();
             Console.WriteLine("----- AGREGAR INVENTARIO -----");
 
+            int id;
             Console.Write("ID Producto: ");
-            int id = int.Parse(Console.ReadLine());
+            while (!int.TryParse(Console.ReadLine(), out id))
+                Console.Write("Ingrese un número válido: ");
 
-            var producto = productos.FirstOrDefault(p => p.Id == id);
+            Producto producto;
+
+            lock (lockObj)
+            {
+                producto = productos.FirstOrDefault(p => p.Id == id);
+            }
 
             if (producto == null)
             {
-                Console.WriteLine("Producto no encontrado.");
+                Console.WriteLine("❌ Producto no existe.");
                 return;
             }
 
@@ -103,86 +153,147 @@ namespace SistemaInventarioTienda
             Console.Write("Color: ");
             string color = Console.ReadLine();
 
+            int cantidad;
             Console.Write("Cantidad: ");
-            int cantidad = int.Parse(Console.ReadLine());
+            while (!int.TryParse(Console.ReadLine(), out cantidad))
+                Console.Write("Ingrese un número válido: ");
 
-            Console.Write("Stock Mínimo: ");
-            int stockMin = int.Parse(Console.ReadLine());
+            int stockMin;
+            Console.Write("Stock mínimo: ");
+            while (!int.TryParse(Console.ReadLine(), out stockMin))
+                Console.Write("Ingrese un número válido: ");
 
-            inventarios.Add(new Inventario
+            lock (lockObj)
             {
-                Producto = producto,
-                Talla = talla,
-                Color = color,
-                Cantidad = cantidad,
-                StockMinimo = stockMin
-            });
+                var existente = inventarios.FirstOrDefault(i =>
+                    i.Producto.Id == id &&
+                    i.Talla == talla &&
+                    i.Color == color);
 
-            Console.WriteLine("✔ Inventario agregado correctamente.");
+                if (existente != null)
+                {
+                    existente.Cantidad += cantidad;
+                }
+                else
+                {
+                    inventarios.Add(new Inventario
+                    {
+                        Producto = producto,
+                        Talla = talla,
+                        Color = color,
+                        Cantidad = cantidad,
+                        StockMinimo = stockMin
+                    });
+                }
+            }
+
+            Log($"Inventario agregado: {producto.Nombre}");
+            Console.WriteLine("✔ Inventario actualizado.");
         }
 
-        static void RegistrarVenta()
+        // ================= CONCURRENCIA =================
+
+        static void SimularVentasConcurrentes()
         {
             Console.Clear();
-            Console.WriteLine("----- REGISTRAR VENTA -----");
+            Console.WriteLine("Simulando ventas concurrentes...\n");
 
-            Console.Write("ID Producto: ");
-            int id = int.Parse(Console.ReadLine());
+            var tareas = new List<Task>();
 
-            Console.Write("Talla: ");
-            string talla = Console.ReadLine();
-
-            Console.Write("Color: ");
-            string color = Console.ReadLine();
-
-            var item = inventarios.FirstOrDefault(i =>
-                i.Producto.Id == id &&
-                i.Talla == talla &&
-                i.Color == color);
-
-            if (item == null)
+            for (int i = 0; i < 10; i++)
             {
-                Console.WriteLine("Producto no encontrado en inventario.");
-                return;
+                tareas.Add(Task.Run(() => RealizarVentaConcurrente()));
             }
 
-            Console.Write("Cantidad a vender: ");
-            int cantidad = int.Parse(Console.ReadLine());
+            Task.WaitAll(tareas.ToArray());
 
-            if (item.Cantidad < cantidad)
+            Console.WriteLine("\n✔ Simulación finalizada.");
+        }
+
+        static void RealizarVentaConcurrente()
+        {
+            var random = new Random(Guid.NewGuid().GetHashCode());
+
+            List<Inventario> copia;
+
+            lock (lockObj)
             {
-                Console.WriteLine("Stock insuficiente.");
-                return;
+                copia = inventarios.ToList();
             }
 
-            item.Cantidad -= cantidad;
-
-            decimal total = cantidad * item.Producto.Precio;
-
-            Console.WriteLine("✔ Venta realizada con éxito.");
-            Console.WriteLine($"Total a pagar: ${total}");
-
-            if (item.Cantidad <= item.StockMinimo)
+            foreach (var item in copia)
             {
-                Console.WriteLine("ALERTA: Producto en bajo stock.");
+                int cantidadVenta = random.Next(1, 3);
+
+                lock (lockObj)
+                {
+                    if (item.Cantidad >= cantidadVenta)
+                    {
+                        item.Cantidad -= cantidadVenta;
+
+                        Log($"Venta: {item.Producto.Nombre} - {cantidadVenta}");
+
+                        if (usarDisco)
+                        {
+                            File.AppendAllText("ventas.txt",
+                                $"{item.Producto.Nombre},{cantidadVenta}\n");
+
+                            Thread.Sleep(50); // simula lentitud de disco
+                        }
+                    }
+                    else
+                    {
+                        Log($"Stock insuficiente: {item.Producto.Nombre}");
+                    }
+                }
             }
         }
+
+        // ================= VER INVENTARIO =================
 
         static void VerInventario()
         {
             Console.Clear();
             Console.WriteLine("----- INVENTARIO ACTUAL -----");
 
-            foreach (var item in inventarios)
+            List<Inventario> copia;
+
+            lock (lockObj)
             {
-                Console.WriteLine($"Producto: {item.Producto.Nombre}");
+                copia = inventarios
+                    .Select(i => new Inventario
+                    {
+                        Producto = i.Producto,
+                        Talla = i.Talla,
+                        Color = i.Color,
+                        Cantidad = i.Cantidad,
+                        StockMinimo = i.StockMinimo
+                    })
+                    .ToList();
+            }
+
+            if (copia.Count == 0)
+            {
+                Console.WriteLine("No hay inventario.");
+                return;
+            }
+
+            foreach (var item in copia)
+            {
+                Console.WriteLine($"Producto: {item.Producto.Nombre} (ID: {item.Producto.Id})");
                 Console.WriteLine($"Talla: {item.Talla}");
                 Console.WriteLine($"Color: {item.Color}");
                 Console.WriteLine($"Cantidad: {item.Cantidad}");
+
+                if (item.Cantidad <= item.StockMinimo)
+                    Console.WriteLine("⚠ Bajo stock");
+
                 Console.WriteLine("---------------------------");
             }
         }
     }
+
+    // ================= CLASES =================
 
     class Producto
     {
