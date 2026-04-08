@@ -57,13 +57,7 @@ Sistema-inventario/
 ├── config.json
 ├── log.txt
 └── README.md
-- Cómo Ejecutar el Proyecto
-Clonar el repositorio:
-git clone https://github.com/tu-usuario/sistema-inventario.git
-Entrar a la carpeta:
-cd sistema-inventario
-Ejecutar el programa:
-python main.py
+
 - Evidencia de Concurrencia
 El sistema puede ejecutar múltiples hilos al mismo tiempo:
 
